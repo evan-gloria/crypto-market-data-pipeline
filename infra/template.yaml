@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Crypto Market Data POC: S3, IAM, and Glue Catalog'
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: crypto-market-data-lake-poc-2026
+  CodeHashParam:
+    Type: String
+    Default: "initial"
+
+Resources:
+  DataLakeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: crypto_market_db
+
+  GlueCrawlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: S3DataLakeAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${DataLakeBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt DataLakeBucket.Arn
+
+  GlueCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: crypto_market_crawler
+      Role: !GetAtt GlueCrawlerRole.Arn
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${DataLakeBucket}/trades/"
+      SchemaChangePolicy:
+        UpdateBehavior: "UPDATE_IN_DATABASE"
+        DeleteBehavior: "DEPRECATE_IN_DATABASE"
+
+  BronzeToSilverEtlJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: crypto_bronze_to_silver_etl
+      Role: !GetAtt GlueCrawlerRole.Arn 
+      GlueVersion: "4.0"
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Timeout: 60
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${DataLakeBucket}/scripts/bronze_to_silver_etl.py"
+        PythonVersion: "3"
+      DefaultArguments:
+        "--job-bookmark-option": "job-bookmark-enable"
+        "--S3_SILVER_PATH": !Sub "s3://${DataLakeBucket}/silver/trades/"
+        "--GLUE_DB_NAME": "crypto_market_db" # Passing the DB name
+        "--GLUE_TABLE_NAME": "trades"        # Passing the Table name
+        "--CODE_HASH": !Ref CodeHashParam  # We will pass this in via CLI

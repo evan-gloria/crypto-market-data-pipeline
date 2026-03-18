@@ -205,3 +205,32 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# Python Environment
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Local Data & Logs (Critical for this POC)
+kraft-combined-logs/
+*.json
+*.log
+
+# Environment Variables & Secrets
+.env
+.env.local
+credentials
+*.pem
+
+# IDEs and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
