@@ -7,7 +7,11 @@ A Proof of Concept (POC) demonstrating a high-throughput, real-time streaming da
 This pipeline simulates the ingestion of high-velocity financial market data (tick data) using a decoupled, event-driven architecture.
 
 ### Phase 1: Local POC (Current State)
+
 This repository contains the functional Proof of Concept, demonstrating the core mechanics of stream buffering, idempotent S3 writes, and Hive-style partitioning.
+
+![Architecture Diagram](assets/crypto-poc-aws-architecture.png)
+
 1. **Data Source:** Public WebSocket API (`wss://stream.binance.com:9443/ws/btcusdt@aggTrade`) streaming live BTC/USDT aggregate trades.
 2. **Message Broker:** Confluent Kafka (KRaft mode) running locally to provide durable buffering and handle backpressure.
 3. **Producer (`producer.py`):** An asynchronous Python client that reads the continuous WebSocket stream and publishes events to the `crypto_market_trades` Kafka topic.
@@ -16,6 +20,7 @@ This repository contains the functional Proof of Concept, demonstrating the core
 6. **Silver Layer Processing (AWS Glue ETL):** A serverless PySpark job (`bronze_to_silver_etl.py`) processes the fragmented JSON files, casts schema data types, and compacts the data into optimized Parquet format to solve the "Small File Problem."
  
 ### Phase 2: Enterprise Target State (Production Design)
+
 To scale this architecture to process millions of events per second with zero data loss, the following managed services represent the target state:
 * **Amazon MSK (Managed Streaming for Kafka):** Replaces local Docker for multi-AZ broker resilience and elastic scaling.
 * **Apache Flink (Amazon Managed Service for Apache Flink):** Replaces the Python consumer for stateful, exactly-once stream processing and real-time schema normalization (handling late-arriving data via watermarks).
@@ -126,3 +131,16 @@ SELECT * FROM crypto_market_db.silver_trades;
 * **Local Kafka vs. Amazon MSK:** For the scope of this POC, local Kafka via Docker was selected to eliminate cloud infrastructure provisioning latency and VPC routing complexity while maintaining the exact same producer/consumer API contracts as a production MSK cluster.
 * **Micro-batching & Partitioning:** The consumer buffers stream data into 60-second windows before flushing to S3. Hive-style partitioning (`year/month/day`) is implemented at the sink to drastically reduce data scanned (and costs) during Athena queries.
 * **Small File Problem & Compaction:** Real-time streaming often results in thousands of small files which degrade query performance. I implemented a Glue PySpark job to perform background compaction, merging the raw JSON into larger Parquet files. This reduced S3 metadata overhead and Athena data scanning costs.
+
+## ⚠️ Disclaimer
+
+This project is a Proof of Concept (POC) built strictly for **educational and personal portfolio purposes**. 
+
+* **No Affiliation:** I am not affiliated, associated, authorized, endorsed by, or in any way officially connected with Binance, any cryptocurrency exchange, or any traditional financial institution (banks, brokerages, etc.).
+* **Not Financial Advice:** The data ingested and processed by this pipeline is for demonstration purposes only. Nothing in this repository constitutes financial, investment, or trading advice.
+* **Use at Your Own Risk:** Real-time market data pipelines can incur significant cloud infrastructure costs if left running. Please ensure you tear down all AWS resources (`aws cloudformation delete-stack`) when you are finished testing.
+
+## 📄 License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+⚙️ Engineered by Evan G.
