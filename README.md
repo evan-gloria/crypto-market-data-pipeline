@@ -6,9 +6,11 @@ A Proof of Concept (POC) demonstrating a high-throughput, real-time streaming da
 
 This pipeline simulates the ingestion of high-velocity financial market data (tick data) using a decoupled, event-driven architecture.
 
-### Phase 1: Local POC (Current State)
+### Architecture V1: Local Broker (Legacy State)
 
 This repository contains the functional Proof of Concept, demonstrating the core mechanics of stream buffering, idempotent S3 writes, and Hive-style partitioning.
+
+The initial implementation focused on stream buffering, idempotent S3 writes, and traditional Hive-style partitioning.
 
 ![Architecture Diagram](assets/crypto-poc-aws-architecture.png)
 
@@ -18,17 +20,20 @@ This repository contains the functional Proof of Concept, demonstrating the core
 4. **Consumer/Sink (`consumer.py`):** A Python consumer that reads from Kafka, micro-batches messages into 60-second windows, and flushes newline-delimited JSON (NDJSON) to Amazon S3 using Hive-style partitioning (`year=YYYY/month=MM/day=DD`).
 5. **Data Catalog & Analytics (AWS):** An AWS Glue Crawler infers the schema of the S3 data lake and registers it in the AWS Glue Data Catalog, enabling serverless ANSI SQL querying via Amazon Athena.
 6. **Silver Layer Processing (AWS Glue ETL):** A serverless PySpark job (`bronze_to_silver_etl.py`) processes the fragmented JSON files, casts schema data types, and compacts the data into optimized Parquet format to solve the "Small File Problem."
- 
-### Phase 2: Enterprise Target State (Production Design)
 
-To scale this architecture to process millions of events per second with zero data loss, the following managed services represent the target state:
-* **Amazon MSK (Managed Streaming for Kafka):** Replaces local Docker for multi-AZ broker resilience and elastic scaling.
-* **Apache Flink (Amazon Managed Service for Apache Flink):** Replaces the Python consumer for stateful, exactly-once stream processing and real-time schema normalization (handling late-arriving data via watermarks).
-* **Apache Iceberg:** Replaces raw JSON S3 files to solve the "Small File Problem" via background compaction and to enable safe, ACID-compliant schema evolution.
+### Architecture V2: Serverless & Apache Iceberg (Current State)
+To scale this architecture, eliminate connection exhaustion, and remove the operational overhead of manual partition management, the pipeline was upgraded to a fully serverless Medallion architecture.
+
+*(Note: Ensure you update your diagram image to reflect Firehose & Iceberg!)*
+
+1. **Ingestion (Kinesis Firehose):** Replaced the local Kafka broker. The Python producer now implements **client-side micro-batching** (100 messages/batch) to stream data directly into Amazon Kinesis Firehose, eliminating WebSocket connection exhaustion and handling massive throughput.
+2. **Bronze Layer (Raw):** Firehose automatically buffers the high-velocity stream and delivers raw JSON files into S3 (`s3://.../bronze/trades/`).
+3. **Silver Layer Processing (AWS Glue ETL):** A serverless PySpark job processes the Bronze data, enforces schema (handling upstream case-sensitivity conflicts from the exchange), and utilizes the **Spark SQL V2 API**.
+4. **Analytics (Apache Iceberg):** The Silver layer is written as an **Apache Iceberg** table. This completely replaces traditional Hive/Parquet files, providing true ACID transactions, automated metadata management, and instant query availability in Amazon Athena with zero `MSCK REPAIR TABLE` commands.
 
 ## ⚙️ Prerequisites
 
-* Docker & Docker Compose
+* Docker (Only required if running the V1 legacy Kafka pipeline)
 * Python 3.10+
 * [Poetry](https://python-poetry.org/) (Dependency Management)
 * AWS CLI configured with SSO
@@ -51,6 +56,8 @@ chmod +x deploy.sh
 ```
 
 *(Note: Update the `S3_BUCKET` variable in `.env` file to match the exact bucket name created by this stack).*
+
+*The following is when using the Legacy Version 1*
 
 ### 2. Local Kafka Cluster
 Spin up the local single-node Kafka broker (KRaft mode).
@@ -126,11 +133,42 @@ SELECT * FROM crypto_market_db.silver_trades;
 
 ```
 
+*The following is when using the Current Version 2*
+
+### 2. Start the Serverless Producer
+Initiate the WebSocket connection and begin micro-batching data into Kinesis Firehose.
+```bash
+poetry run python src/firehose_producer.py
+```
+
+### 3. Silver Layer Transformation (Bronze to Iceberg)
+After allowing Firehose to buffer a few minutes of data into the Bronze S3 bucket, trigger the serverless Glue PySpark job. This job reads the raw JSON, dynamically creates the Iceberg table on its first run, and safely appends data on all subsequent runs.
+
+```bash
+aws glue start-job-run --job-name firehose-bronze-to-silver-job --profile your-aws-profile
+```
+
+
+### 4. Real-Time Analytics (Amazon Athena)
+Because this pipeline uses Apache Iceberg, there is no need to run Crawlers or repair partitions. Once the Glue job succeeds, the data is instantly available in Athena:
+
+```sql
+SELECT 
+    event_time_ms,
+    trade_price,
+    trade_quantity,
+    is_market_maker
+FROM "crypto_market_db"."silver_firehose_trades_iceberg"
+ORDER BY event_time_ms DESC
+LIMIT 100;
+```
+
+
 ## 🧠 Design Decisions & Trade-Offs
 * **Push vs. Poll:** A live WebSocket was chosen over a REST API (like Yahoo Finance) to properly simulate the unbounded, push-based nature of exchange market data (e.g., FIX/ITCH protocols) and to test asynchronous I/O handling.
-* **Local Kafka vs. Amazon MSK:** For the scope of this POC, local Kafka via Docker was selected to eliminate cloud infrastructure provisioning latency and VPC routing complexity while maintaining the exact same producer/consumer API contracts as a production MSK cluster.
-* **Micro-batching & Partitioning:** The consumer buffers stream data into 60-second windows before flushing to S3. Hive-style partitioning (`year/month/day`) is implemented at the sink to drastically reduce data scanned (and costs) during Athena queries.
-* **Small File Problem & Compaction:** Real-time streaming often results in thousands of small files which degrade query performance. I implemented a Glue PySpark job to perform background compaction, merging the raw JSON into larger Parquet files. This reduced S3 metadata overhead and Athena data scanning costs.
+* **Producer Micro-Batching:** Calling the AWS API for every individual tick resulted in `boto3` connection exhaustion ("Broken Pipes"). Implementing a local array buffer before calling `put_record_batch` solved the latency bottleneck and drastically reduced AWS API costs.
+* **Shadow Pipeline Migration:** To safely migrate from Kafka to Firehose, both pipelines were run simultaneously. Separate Glue Crawlers and prefix-isolated tables (`firehose_trades`) were used to ensure exact data parity before deprecating the local broker.
+* **Apache Iceberg vs. Hive Partitioning:** Real-time streaming into traditional S3 data lakes creates the "invisible data" problem, requiring constant partition updates via `MSCK REPAIR`. Upgrading the Silver layer to Apache Iceberg shifted the paradigm from folder-based tracking to file-level transaction logs, enabling instant query availability and background compaction.
 
 ## ⚠️ Disclaimer
 
