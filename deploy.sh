@@ -9,7 +9,7 @@ source .env
 echo "Starting Deployment Pipeline..."
 
 # Generate a unique hash based on the content of the ETL script
-SCRIPT_HASH=$(md5sum src/jobs/bronze_to_silver_etl.py | cut -d ' ' -f 1)
+SCRIPT_HASH=$(md5sum src/jobs/*_etl.py | cut -d ' ' -f 1)
 
 # Step 1: Upload the PySpark script to the S3 Data Lake
 # We use 'sync' so it only uploads if the file has changed
@@ -23,6 +23,7 @@ aws cloudformation deploy \
   --template-file infra/template.yaml \
   --stack-name crypto-market-data-infra \
   --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides BinanceWsUrl=$BINANCE_WS_URL \
   --profile ${AWS_PROFILE}
 
 echo "Deployment Complete!"
