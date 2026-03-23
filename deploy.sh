@@ -23,6 +23,7 @@ aws cloudformation deploy \
   --template-file infra/template.yaml \
   --stack-name crypto-market-data-infra \
   --capabilities CAPABILITY_NAMED_IAM \
+  --parameter-overrides BinanceWsUrl=$BINANCE_WS_URL \
   --profile ${AWS_PROFILE}
 
 echo "Deployment Complete!"

@@ -8,6 +8,10 @@ Parameters:
   CodeHashParam:
     Type: String
     Default: "initial"
+  BinanceWsUrl:
+    Type: String
+    Description: "The WebSocket URL for the Binance stream"
+    Default: "wss://stream.binance.com:9443/ws/btcusdt@aggTrade"
 
 Resources:
   DataLakeBucket:
@@ -111,6 +115,7 @@ Resources:
         PythonVersion: "3"
       DefaultArguments:
         "--job-bookmark-option": "job-bookmark-enable"
+        "--S3_BRONZE_PATH": !Sub "s3://${DataLakeBucket}/bronze/trades/"
         "--S3_SILVER_PATH": !Sub "s3://${DataLakeBucket}/silver/firehose_trades/"
         "--GLUE_DB_NAME": "crypto_market_db" # Passing the DB name
         "--GLUE_TABLE_NAME": "firehose_trades"        # Passing the Table name
@@ -160,3 +165,96 @@ Resources:
         BufferingHints:
           SizeInMBs: 1
           IntervalInSeconds: 60
+
+  # --------------------------------------------------------
+  # ECS Cluster & Fargate Setup for Producer
+  # --------------------------------------------------------
+  ProducerCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: crypto-market-cluster
+
+  ProducerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/crypto-firehose-producer
+      RetentionInDays: 7
+
+  ProducerTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  ProducerTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FirehoseWriteAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - firehose:PutRecordBatch
+                  - firehose:PutRecord
+                # Update this if your Firehose resource has a different name!
+                Resource: !GetAtt MarketDataFirehose.Arn 
+
+  ProducerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: crypto-firehose-producer
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: '256'       # 0.25 vCPU (Cheapest tier)
+      Memory: '512'    # 512 MB RAM (Cheapest tier)
+      ExecutionRoleArn: !GetAtt ProducerTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ProducerTaskRole.Arn
+      ContainerDefinitions:
+        - Name: producer
+          # AWS natively resolves AccountId and Region here!
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/crypto-firehose-producer:latest"
+          Essential: true
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref "AWS::Region"
+            - Name: FIREHOSE_STREAM_NAME
+              Value: !Ref MarketDataFirehose
+            - Name: BINANCE_WS_URL
+              Value: !Ref BinanceWsUrl
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ProducerLogGroup
+              awslogs-region: !Ref "AWS::Region"
+              awslogs-stream-prefix: ecs
+  
+  # --------------------------------------------------------
+  # Native Glue Scheduled Trigger (Replaces EventBridge)
+  # --------------------------------------------------------
+  GlueJobScheduleTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: crypto-etl-15min-schedule
+      Type: SCHEDULED
+      Description: "Triggers the Bronze to Silver ETL job every 15 minutes"
+      Schedule: "cron(0/15 * ? * * *)"
+      StartOnCreation: true
+      Actions:
+        - JobName: !Ref FirehoseBronzeToSilverJob

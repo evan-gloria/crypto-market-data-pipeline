@@ -6,20 +6,27 @@ from awsglue.context import GlueContext
 from awsglue.job import Job
 
 # 1. Initialize Glue Context (Now expecting DB and Table parameters)
-args = getResolvedOptions(sys.argv, ['JOB_NAME', 'S3_SILVER_PATH', 'GLUE_DB_NAME', 'GLUE_TABLE_NAME'])
+args = getResolvedOptions(sys.argv, ['JOB_NAME', 'S3_SILVER_PATH', 'GLUE_DB_NAME', 'GLUE_TABLE_NAME', 'S3_BRONZE_PATH'])
 sc = SparkContext.getOrCreate()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-# 2. Extract: Read from the dynamically injected Catalog Database and Table
-bronze_dynamic_frame = glueContext.create_dynamic_frame.from_catalog(
-    database=args['GLUE_DB_NAME'],
-    table_name=args['GLUE_TABLE_NAME'],
+# 2. Extract: Read directly from the raw Bronze S3 Bucket
+# We bypass the Glue Catalog entirely. Glue Job Bookmarks will automatically
+# track which files in this S3 path have already been processed.
+bronze_dynamic_frame = glueContext.create_dynamic_frame.from_options(
+    connection_type="s3",
+    connection_options={
+        "paths": [args['S3_BRONZE_PATH']],
+        "recurse": True,
+        "enablePartitioning": True,
+        "partitionKeys": ["year", "month", "day"]
+    },
+    format="json",
     transformation_ctx="bronze_read"
 )
-
 # 3. Transform: Ensure Schema Consistency
 # Even though we fixed it in the catalog, this explicitly casts data types 
 # for the Silver layer, which is a best practice for Parquet.

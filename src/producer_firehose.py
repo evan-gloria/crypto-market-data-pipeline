@@ -12,10 +12,13 @@ STREAM_NAME = os.getenv('FIREHOSE_STREAM_NAME', 'crypto-market-firehose')
 SOCKET_URL = os.getenv('BINANCE_WS_URL', 'wss://stream.binance.com:9443/ws/btcusdt@aggTrade')
 AWS_PROFILE = os.getenv('AWS_PROFILE', 'default')
 
-# Initialize the boto3 session using your specific profile
-session = boto3.Session(profile_name=AWS_PROFILE, region_name=REGION_NAME)
-# Initialize the boto3 client
-firehose = boto3.client('firehose', region_name=REGION_NAME)
+# Check if AWS_PROFILE exists in the environment (Local Testing)
+if AWS_PROFILE and AWS_PROFILE != 'default':
+    session = boto3.Session(profile_name=AWS_PROFILE, region_name=REGION_NAME)
+    firehose = session.client('firehose')
+else:
+    # If no profile is set, let Boto3 automatically find the Fargate IAM Role credentials
+    firehose = boto3.client('firehose', region_name=REGION_NAME)
 
 def on_message(ws, message):
     # CRITICAL: Add newline for Athena/PySpark NDJSON parsing
