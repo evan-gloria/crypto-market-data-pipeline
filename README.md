@@ -2,6 +2,10 @@
 
 A Proof of Concept (POC) demonstrating a high-throughput, real-time streaming data pipeline. It ingests unbounded WebSocket tick data, buffers it via a local message broker, and micro-batches it into a serverless data lake architecture for ad-hoc querying.
 
+## 📊 Executive Presentation
+For a high-level overview of the architectural pivot, trade-offs, and business outcomes, please view the slide deck:
+**[View the Serverless Medallion Architecture Presentation (PDF)](./assets/Data-Stream-Crypto-Market-Deck.pdf)**
+
 ## 🏗️ Architecture Overview
 
 This pipeline simulates the ingestion of high-velocity financial market data (tick data) using a decoupled, event-driven architecture.
@@ -11,7 +15,6 @@ This pipeline simulates the ingestion of high-velocity financial market data (ti
 This repository contains the functional Proof of Concept, demonstrating the core mechanics of stream buffering, idempotent S3 writes, and traditional Hive-style partitioning.
 
 ![Architecture Diagram](assets/crypto-poc-aws-architecture.png)
-*(Note: Update your diagram image to reflect V2 Firehose & Iceberg architecture when ready!)*
 
 1. **Data Source:** Public WebSocket API (`wss://stream.binance.com:9443/ws/btcusdt@aggTrade`) streaming live BTC/USDT aggregate trades.
 2. **Message Broker:** Confluent Kafka (KRaft mode) running locally to provide durable buffering and handle backpressure.
@@ -23,6 +26,8 @@ This repository contains the functional Proof of Concept, demonstrating the core
 ### Architecture V2: Serverless & Apache Iceberg (Current State)
 
 To scale this architecture, eliminate connection exhaustion, and remove the operational overhead of manual partition management, the pipeline was upgraded to a fully serverless Medallion architecture.
+
+![Architecture Diagram](assets/crypto-poc-aws-architecture-2.png)
 
 1. **Compute Layer (AWS Fargate):** The ingestion engine is containerized via Docker and runs 24/7 on AWS Fargate, decoupling the producer from local hardware and providing highly available serverless compute.
 2. **Ingestion (Kinesis Firehose):** Replaced the local Kafka broker. The Fargate Python producer implements **client-side micro-batching** (100 messages/batch) to stream data directly into Amazon Kinesis Firehose, eliminating WebSocket connection exhaustion and handling massive throughput.
@@ -157,6 +162,13 @@ This project is a Proof of Concept (POC) built strictly for **educational and pe
   * **No Affiliation:** I am not affiliated, associated, authorized, endorsed by, or in any way officially connected with Binance, any cryptocurrency exchange, or any traditional financial institution (banks, brokerages, etc.).
   * **Not Financial Advice:** The data ingested and processed by this pipeline is for demonstration purposes only. Nothing in this repository constitutes financial, investment, or trading advice.
   * **Use at Your Own Risk:** Real-time market data pipelines can incur significant cloud infrastructure costs if left running. Please ensure you tear down all AWS resources (`aws cloudformation delete-stack`) when you are finished testing.
+
+**General API Reference:** 
+Binance Official Spot API Documentation: [https://developers.binance.com/docs/binance-spot-api-docs](https://developers.binance.com/docs/binance-spot-api-docs)
+
+**Specific WebSocket Reference (Best for this POC):**
+Binance Official Market Data WebSocket Streams: [https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams)
+
 
 ## 📄 License
 
